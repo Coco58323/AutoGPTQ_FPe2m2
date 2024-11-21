@@ -159,6 +159,10 @@ class QuantLinear(nn.Module):
                 dtype=weight_dtype,
             ),
         )
+        self.register_buffer(
+            "sign_map",
+            torch.zeros((infeatures // 32, outfeatures), dtype=torch.int32),
+        )
         if bias:
             self.register_buffer("bias", torch.zeros((outfeatures), dtype=weight_dtype))
         else:
@@ -245,6 +249,8 @@ class QuantLinear(nn.Module):
         # intweight = intweight.apply_(e2m2_map_inv)
         intweight = torch.take(self.inverse_table, intweight)
         intweight = intweight.reshape(self.infeatures, self.outfeatures).T
+        self.wf_sign = self.wf_sign.to(self.qweight.device)
+        self.sign_map = self.sign_map.to(self.qweight.device)
         bit_map = torch.bitwise_right_shift(
             torch.unsqueeze(self.sign_map, 1).expand(-1, 32, -1),
             self.wf_sign.unsqueeze(-1),
@@ -252,23 +258,18 @@ class QuantLinear(nn.Module):
         bit_map = torch.bitwise_and(bit_map, 1).to(torch.uint32)
         bit_map = bit_map.reshape(self.infeatures, self.outfeatures)
         bit_map = bit_map.t()
-        self.weight = intweight * (self.scales.T)
-        self.weight = self.weight.to(self.wf.device)
+        weight = intweight * (self.scales.T)
+        weight = weight.to(self.wf.device)
         bit_map = bit_map.to(self.wf.device)
-        self.weight = torch.where(bit_map == 1, -self.weight, self.weight)
-        # data1 = self.compare_weight.data
-        # data2 = self.weight.data
-        # data1 = data1.to(dtype=torch.float32)
-        # data2 = data2.to(dtype=torch.float32)
-        # data2 = data2.to(data1.device)
-        # assert torch.allclose(data1, data2, atol=1e-5), f"Quantized weight is not equal to original weight. Max diff: {torch.abs(data1 - data2).amax()}"
+        weight = torch.where(bit_map == 1, -weight, weight)
+        return weight
 
     def forward(self, x: torch.Tensor):
         out_shape = x.shape[:-1] + (self.outfeatures,)
         x = x.reshape(-1, x.shape[-1])
         x_dtype = x.dtype
         out = torch.zeros((x.shape[0], self.outfeatures), device=x.device, dtype=torch.float32)
-        if self.ready:
+        if x.shape[0] >= 128000:
             self.autogptq_cuda.vecquant4matmul(
                 x.float(), #  fp8 (batch, infeatures)
                 self.qweight, # int32 (infeatures // 32 * self.bits, outfeatures)
@@ -277,9 +278,9 @@ class QuantLinear(nn.Module):
                 self.scales.float(), # fp8 (1, outfeatures)
             )
         else:
-            self.unpack()
-            self.weight = self.weight.to(x.device)
-            out = x @ self.weight.T
+            weight = self.unpack()
+            weight = weight.to(x.device)
+            out = x @ weight.T
         out = out.to(x_dtype)
         out = out.reshape(out_shape)
         out = out + self.bias if self.bias is not None else out

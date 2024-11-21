@@ -921,6 +921,7 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                     desc_act=quantize_config.desc_act,
                     trainable=trainable,
                     use_tritonv2=use_tritonv2,
+                    use_fpe2m2=quantize_config.checkpoint_format == CHECKPOINT_FORMAT.FPE2M2,
                 )
                 model.tie_weights()
 

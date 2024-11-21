@@ -196,6 +196,11 @@ def main():
         action="store_true",
         help="whether to trust remote code when loading model",
     )
+    parser.add_argument(
+        "--ready",
+        action="store_true",
+        help="whether to quantize model",
+    )
     args = parser.parse_args()
 
     max_memory = {}
@@ -221,46 +226,45 @@ def main():
         torch_dtype=torch.bfloat16,
     )
 
-    examples = get_ours(args.num_samples, args.calib_data, 2048, args.pretrained_model_dir, tokenizer, eval_mode=True)
-    examples_for_quant = [
-        {"input_ids": example["input_ids"], "attention_mask": example["attention_mask"]} for example in examples
-    ]
-    start = time.time()
-    model.quantize(
-        examples_for_quant,
-        batch_size=args.quant_batch_size,
-        # cache_examples_on_gpu=False,
-    )
-    end = time.time()
-    print(f"quantization took: {end - start: .4f}s")
+    if not args.ready:
+        examples = get_ours(args.num_samples, args.calib_data, 2048, args.pretrained_model_dir, tokenizer, eval_mode=True)
+        examples_for_quant = [
+            {"input_ids": example["input_ids"], "attention_mask": example["attention_mask"]} for example in examples
+        ]
+        start = time.time()
+        model.quantize(
+            examples_for_quant,
+            batch_size=args.quant_batch_size,
+            # cache_examples_on_gpu=False,
+        )
+        end = time.time()
+        print(f"quantization took: {end - start: .4f}s")
 
-    if not args.quantized_model_dir:
-        args.quantized_model_dir = args.pretrained_model_dir
-    text = "The quick brown fox jumps over the lazy dog"
+        if not args.quantized_model_dir:
+            args.quantized_model_dir = args.pretrained_model_dir
+        # if args.save_and_reload:
+        import os
+        import shutil
+        os.makedirs(args.quantized_model_dir, exist_ok=True)
+        for file in os.listdir(args.pretrained_model_dir):
+            if file.endswith(".txt") or file.endswith(".json"):
+                shutil.copy(os.path.join(args.pretrained_model_dir, file), args.quantized_model_dir)
+        model.save_pretrained(args.quantized_model_dir)
+        del model
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    print("load model")
+    model = AutoGPTQForCausalLM.from_quantized(
+        args.quantized_model_dir,
+        quantize_config=quant_config,
+        trust_remote_code=args.trust_remote_code,
+    )
+    text = "Instruction:\nWrite a summary.\nInput:We consider the problem of model compression for deep neural networks (DNNs) in the challenging one-shot/post-training setting, in which we are given an accurate trained model, and must compress it without any retraining, based only on a small amount of calibration input data. This problem has become popular in view of the emerging software and hardware support for executing models compressed via pruning and/or quantization with speedup, and well-performing solutions have been proposed independently for both compression approaches. In this paper, we introduce a new compression framework which covers both weight pruning and quantization in a unified setting, is time- and space-efficient, and considerably improves upon the practical performance of existing post-training methods. At the technical level, our approach is based on an exact and efficient realization of the classical Optimal Brain Surgeon (OBS) framework of [LeCun, Denker, and Solla, 1990] extended to also cover weight quantization at the scale of modern DNNs. From the practical perspective, our experimental results show that it can improve significantly upon the compression-accuracy trade-offs of existing post-training methods, and that it can enable the accurate compound application of both pruning and quantization in a post-training setting."
     # let model generate text
-    pipeline = TextGenerationPipeline(model, tokenizer,device='cuda')
-    print(pipeline(text, max_length=50, do_sample=True, temperature=0.7))
-    # if args.save_and_reload:
-    #     import os
-    #     import shutil
-    #     os.makedirs(args.quantized_model_dir, exist_ok=True)
-    #     for file in os.listdir(args.pretrained_model_dir):
-    #         if file.endswith(".txt") or file.endswith(".json"):
-    #             shutil.copy(os.path.join(args.pretrained_model_dir, file), args.quantized_model_dir)
-    #     model.save_pretrained(args.quantized_model_dir)
-    #     del model
-    #     if torch.cuda.is_available():
-    #         torch.cuda.empty_cache()
-    #     print("load model")
-    #     model = AutoGPTQForCausalLM.from_quantized(
-    #         args.quantized_model_dir,
-    #         quantize_config=quant_config,
-    #         trust_remote_code=args.trust_remote_code,
-    #     )
-    # text = "The quick brown fox jumps over the lazy dog"
-    # # let model generate text
-    # pipeline = TextGenerationPipeline(model, tokenizer,device='cuda')
-    # print(pipeline(text, max_length=50, do_sample=True, temperature=0.7))
+    inputs = tokenizer(text, return_tensors="pt",max_length=128,padding=True,truncation=True).to(model.device)
+    outputs = model.generate(**inputs, max_length=2048, num_beams=1, no_repeat_ngram_size=2, early_stopping=True)
+    print(tokenizer.decode(outputs[0], skip_special_tokens=True))
 
 if __name__ == "__main__":
     import logging

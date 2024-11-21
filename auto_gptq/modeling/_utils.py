@@ -81,6 +81,7 @@ def make_quant(
     desc_act: bool = False,
     trainable: bool = False,
     use_tritonv2: bool = False,
+    use_fpe2m2: bool = False,
 ):
     # If disable_exllamav2 is True, we want to fall back on the exllama kernel and not the cuda/cuda_old ones.
     if disable_exllama is None:
@@ -99,6 +100,7 @@ def make_quant(
         disable_exllamav2=disable_exllamav2,
         use_qigen=use_qigen,
         use_tritonv2=use_tritonv2,
+        use_fpe2m2=use_fpe2m2,
     )
 
     if isinstance(module, QuantLinear):
@@ -266,6 +268,7 @@ def pack_model(
     force_layer_back_to_cpu: bool = False,
     use_marlin: bool = False,
     use_tritonv2: bool = False,
+    use_fpe2m2: bool = False,
 ):
     QuantLinear = dynamically_import_QuantLinear(
         use_triton=use_triton,
@@ -276,6 +279,7 @@ def pack_model(
         disable_exllamav2=True,
         use_marlin=use_marlin,
         use_tritonv2=use_tritonv2,
+        use_fpe2m2=use_fpe2m2,
     )
 
     if force_layer_back_to_cpu:
@@ -295,6 +299,7 @@ def pack_model(
         disable_exllama=False,
         disable_exllamav2=True,
         use_marlin=use_marlin,
+        use_fpe2m2=use_fpe2m2,
     )
     qlayers = find_layers(model, [QuantLinear])
 

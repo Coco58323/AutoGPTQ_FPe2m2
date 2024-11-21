@@ -28,6 +28,7 @@ class CHECKPOINT_FORMAT:
     GPTQ = "gptq"
     MARLIN = "marlin"
     AWQ_GEMM = "gemm"
+    FPE2M2 = "fpe2m2"
 
 
 # quant methods
@@ -36,10 +37,12 @@ class QUANT_METHOD:
     AWQ = "awq"
 
 
+
 QUANT_METHOD_FORMAT_MAPPING = {
     QUANT_METHOD.GPTQ: {
         CHECKPOINT_FORMAT.GPTQ,
         CHECKPOINT_FORMAT.MARLIN,
+        CHECKPOINT_FORMAT.FPE2M2,
     },
     QUANT_METHOD.AWQ: {
         CHECKPOINT_FORMAT.AWQ_GEMM

@@ -16,7 +16,7 @@
 </h4>
 
 ## News or Update
-
+python quant.py --pretrained_model_dir /root/data/model/Qwen2.5/Qwen2.5-0.5B-Instruct --quantized_model_dir ./Qwen2.5-0.5B-FPe2m2_test --num_samples 64 --quant_batch_size 1 --calib_data /root/exp/moe-lora/data/v10.15.35_beta.jsonl
 - 2024-02-15 - (News) - AutoGPTQ 0.7.0 is released, with [Marlin](https://github.com/IST-DASLab/marlin) int4*fp16 matrix multiplication kernel support, with the argument `use_marlin=True` when loading models.
 - 2023-08-23 - (News) - 🤗 Transformers, optimum and peft have integrated `auto-gptq`, so now running and training GPTQ models can be more available to everyone! See [this blog](https://huggingface.co/blog/gptq-integration) and it's resources for more details!
 

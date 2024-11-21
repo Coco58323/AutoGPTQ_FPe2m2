@@ -13,6 +13,32 @@ def quantize(x, scale, zero, maxq):
     q = torch.clamp(torch.round(x / scale) + zero, 0, maxq)
     return scale * (q - zero)
 
+def get_scale(input, bits, mantissa_bit, bias):
+        M = mantissa_bit
+        E = bits - 1 - M
+        maxval = (2 - 2 ** (-M)) * 2 ** (
+                2**E - 1 - bias
+            )
+        minval = -maxval
+        input = input.clamp(minval, maxval)
+        input_log_scales = torch.clamp((torch.floor(torch.log2(torch.abs(input)) + bias)).detach(), 1.0)
+        return input, 2.0 ** (input_log_scales - M - bias)
+def round_ste(x: torch.Tensor):
+    """
+    Implement Straight-Through Estimator for rounding operation.
+    """
+    return (x.round() - x).detach() + x
+def sym_quant_fpe2m2_fake(x,scale=None,zero=None,power_scale=None):
+    dtype=x.dtype
+    if scale is None:
+        scale = x.abs().amax(dim=-1,keepdim=True) / 14
+    scale = scale.to(x.device)
+    x = x.div(scale)
+    x=x.clamp(min=-14,max=14)
+    pot, v_step = get_scale(x,5,2,0)
+    x=round_ste(pot/v_step).mul(v_step)
+    x = x.mul(scale).to(dtype=dtype)
+    return x
 
 class Quantizer(nn.Module):
     def __init__(self, shape=1):
@@ -24,14 +50,15 @@ class Quantizer(nn.Module):
     def configure(
         self,
         bits,
-        perchannel=False,
+        perchannel=True,
         sym=True,
         mse=False,
         norm=2.4,
         grid=100,
         maxshrink=0.8,
-        trits=False,
+
     ):
+        self.bits = bits
         self.maxq = torch.tensor(2**bits - 1)
         self.perchannel = perchannel
         self.sym = sym
@@ -39,8 +66,7 @@ class Quantizer(nn.Module):
         self.norm = norm
         self.grid = grid
         self.maxshrink = maxshrink
-        if trits:
-            self.maxq = torch.tensor(-1)
+        self.maxq = torch.tensor(28)
 
     def find_params(self, x, weight=False):
         dev = x.device
@@ -48,20 +74,11 @@ class Quantizer(nn.Module):
 
         shape = x.shape
         if self.perchannel:
-            if weight:
-                x = x.flatten(1)
-            else:
-                if len(shape) == 4:
-                    x = x.permute([1, 0, 2, 3])
-                    x = x.flatten(1)
-                if len(shape) == 3:
-                    x = x.reshape((-1, shape[-1])).t()
-                if len(shape) == 2:
-                    x = x.t()
+            x = x.flatten(1)
         else:
             x = x.flatten().unsqueeze(0)
 
-        tmp = torch.zeros(x.shape[0], device=dev)
+        tmp = torch.zeros(x.shape[0], device=dev,dtype=x.dtype)
         xmin = torch.minimum(x.min(1)[0], tmp)
         xmax = torch.maximum(x.max(1)[0], tmp)
 
@@ -92,7 +109,7 @@ class Quantizer(nn.Module):
                 xmax1 = p * xmax
                 scale1 = (xmax1 - xmin1) / self.maxq
                 zero1 = torch.round(-xmin1 / scale1) if not self.sym else self.zero
-                q = quantize(x, scale1.unsqueeze(1), zero1.unsqueeze(1), self.maxq)
+                q = sym_quant_fpe2m2_fake(x, scale1.unsqueeze(1), zero1.unsqueeze(1), self.maxq)
                 q -= x
                 q.abs_()
                 q.pow_(self.norm)
@@ -127,7 +144,7 @@ class Quantizer(nn.Module):
 
     def quantize(self, x):
         if self.ready():
-            return quantize(x, self.scale, self.zero, self.maxq)
+            return sym_quant_fpe2m2_fake(x, self.scale, self.zero, self.maxq)
         return x
 
     def enabled(self):

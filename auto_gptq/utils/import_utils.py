@@ -66,6 +66,7 @@ def dynamically_import_QuantLinear(
     use_qigen: bool = False,
     use_marlin: bool = False,
     use_tritonv2: bool = False,
+    use_fpe2m2: bool = False,
 ):
     try:
         import habana_frameworks.torch.hpu  # noqa: F401
@@ -73,6 +74,10 @@ def dynamically_import_QuantLinear(
         pass
     else:
         from ..nn_modules.qlinear.qlinear_hpu import QuantLinear
+        return QuantLinear
+    print(use_fpe2m2)
+    if use_fpe2m2:
+        from ..nn_modules.qlinear.qlinear_e2m2 import QuantLinear
         return QuantLinear
     if use_qigen:
         if not QIGEN_AVAILABLE:

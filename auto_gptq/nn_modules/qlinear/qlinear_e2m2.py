@@ -137,14 +137,12 @@ class QuantLinear(nn.Module):
     ):
         super().__init__()
         global _autogptq_cuda_available
-        if bits not in [2, 3, 4, 8]:
-            raise NotImplementedError("Only 2,3,4,8 bits are supported.")
         if trainable:
             _autogptq_cuda_available = False
 
         self.infeatures = infeatures
         self.outfeatures = outfeatures
-        self.bits = bits
+        self.bits = 4
         self.group_size = group_size if group_size != -1 else infeatures
         self.maxq = 2**self.bits - 1
 
@@ -269,7 +267,7 @@ class QuantLinear(nn.Module):
         x = x.reshape(-1, x.shape[-1])
         x_dtype = x.dtype
         out = torch.zeros((x.shape[0], self.outfeatures), device=x.device, dtype=torch.float32)
-        if x.shape[0] >= 128000:
+        if self.ready:
             self.autogptq_cuda.vecquant4matmul(
                 x.float(), #  fp8 (batch, infeatures)
                 self.qweight, # int32 (infeatures // 32 * self.bits, outfeatures)

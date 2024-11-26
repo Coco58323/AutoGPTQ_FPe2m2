@@ -29,6 +29,7 @@ class CHECKPOINT_FORMAT:
     MARLIN = "marlin"
     AWQ_GEMM = "gemm"
     FPE2M2 = "fpe2m2"
+    FP16 = "fp16"
 
 
 # quant methods
@@ -43,6 +44,7 @@ QUANT_METHOD_FORMAT_MAPPING = {
         CHECKPOINT_FORMAT.GPTQ,
         CHECKPOINT_FORMAT.MARLIN,
         CHECKPOINT_FORMAT.FPE2M2,
+        CHECKPOINT_FORMAT.FP16,
     },
     QUANT_METHOD.AWQ: {
         CHECKPOINT_FORMAT.AWQ_GEMM
@@ -68,7 +70,9 @@ class BaseQuantizeConfig(PushToHubMixin):
     static_groups: bool = field(default=False)
     sym: bool = field(default=True)
     true_sequential: bool = field(default=True)
+    mixed_precision: bool = field(default=False)
     quant_method: str = field(default=QUANT_METHOD.GPTQ)
+    exp: Optional[int] = field(default=None)
     checkpoint_format: str = field(default=CHECKPOINT_FORMAT.GPTQ)
     model_name_or_path: Optional[str] = field(default=None)
     model_file_base_name: Optional[str] = field(default=None)
@@ -86,8 +90,8 @@ class BaseQuantizeConfig(PushToHubMixin):
                 f"The checkpoint format used is {self.checkpoint_format}, and the quantization method is {self.quant_method}. "
                 f"This is not supported, please open an issue at https://github.com/AutoGPTQ/AutoGPTQ/issues.")
 
-        if self.bits not in fields_info[0].metadata["choices"]:
-            raise ValueError(f"only support quantize to {fields_info[0].metadata['choices']} bits.")
+        # if self.bits not in fields_info[0].metadata["choices"]:
+        #     raise ValueError(f"only support quantize to {fields_info[0].metadata['choices']} bits.")
 
         if self.group_size != -1 and self.group_size <= 0:
             raise ValueError("unless equal to -1, group_size must greater then 0.")
@@ -252,6 +256,8 @@ class BaseQuantizeConfig(PushToHubMixin):
             "damp_percent": self.damp_percent,
             "desc_act": self.desc_act,
             "static_groups": self.static_groups,
+            "mixed_precision": self.mixed_precision,
+            "exp": self.exp,
             "sym": self.sym,
             "true_sequential": self.true_sequential,
             "model_name_or_path": self.model_name_or_path,

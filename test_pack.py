@@ -218,7 +218,8 @@ class WeightPack:
         bit_map = torch.bitwise_and(bit_map, 1).to(torch.uint32)
         bit_map = bit_map.reshape(self.infeatures, self.outfeatures)
         bit_map = bit_map.t()
-        self.weight = intweight * (self.scales.T)
+        # self.weight = intweight * (self.scales.T)
+        self.weight = intweight
         self.weight = self.weight.to(self.wf.device)
         bit_map = bit_map.to(self.wf.device)
         self.weight = torch.where(bit_map == 1, -self.weight, self.weight)
@@ -228,9 +229,29 @@ weight.weight.data = sym_quant_fpe2m2_fake(weight.weight.data)
 weight_pack = WeightPack(4096, 4096, 4)
 weight_pack.pack(weight)
 weight_pack.unpack()
-# compare weight_pack.weight with weight
 weight1 = weight_pack.weight
 weight2 = weight
-print(weight1)
-print(weight2.weight.data)
-assert torch.allclose(weight1, weight2.weight.data, atol=1e-5)
+
+weight1 = torch.randn(4096, 4096)
+activation = torch.randn(4096, 4096)
+activation[:, 0] = torch.ones(4096)*20
+activation[:, 1] = torch.ones(4096)*30
+qmax = torch.finfo(torch.float8_e4m3fn).max-1
+weight1 = weight1.clamp(-qmax, qmax)
+activation = activation.clamp(-qmax, qmax)
+
+output1 = torch.matmul(activation, weight1.t())
+
+weight1 = weight1.to(torch.float8_e4m3fn).to(torch.float)
+scales = activation.abs().amax(dim=-1, keepdim=True) / qmax
+activation = activation / scales
+activation = activation.to(torch.float8_e4m3fn).to(torch.float)
+output2 = torch.matmul(activation, weight1.t())
+output2 = output2 * scales
+
+weight1 = weight1.to(torch.float8_e4m3fn)
+activation = activation.to(torch.float8_e4m3fn)
+# todo: replace gemm_e4m3fn with the correct function
+otuput3 = gemm_e4m3fn(activation, weight1.t())
+
+assert torch.allclose(output2, otuput3, atol=1e-5)

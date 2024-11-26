@@ -180,6 +180,7 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
         use_cuda_fp16: bool = True,
         autotune_warmup_after_quantized: bool = False,
         cache_examples_on_gpu: bool = True,
+        fpe2m2_checkpoint_format: bool = True,
     ):
         if self.quantized:
             raise EnvironmentError("can't execute quantize because the model is quantized.")
@@ -297,12 +298,22 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                 subset = {n: full[n] for n in names if n in full}
                 gptq = {}
                 for name in subset:
+                    if 'q_proj' in name or 'k_proj' in name or 'v_proj' in name:
+                        if self.quantize_config.mixed_precision:
+                            assert self.quantize_config.checkpoint_format != CHECKPOINT_FORMAT.FPE2M2
+                            bits = 8
+                        else:
+                            bits = self.quantize_config.bits
+                    else:
+                        bits = self.quantize_config.bits
+                    print(f"quantizing {names} with {bits} bits")
                     gptq[name] = GPTQ(subset[name])
                     gptq[name].quantizer.configure(
-                        self.quantize_config.bits,
+                        bits,
                         perchannel=True,
                         sym=self.quantize_config.sym,
                         mse=False,
+                        exp=self.quantize_config.exp,
                     )
 
                 def add_batch(name):
@@ -373,26 +384,26 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
             del layer_inputs
             layer_inputs, layer_outputs = layer_outputs, []  # TODO: is it really OK to cache only the first positional argument?
             torch.cuda.empty_cache()
-
-        pack_model(
-            model=self.model,
-            quantizers=quantizers,
-            bits=self.quantize_config.bits,
-            group_size=self.quantize_config.group_size,
-            use_triton=use_triton,
-            use_cuda_fp16=use_cuda_fp16,
-            desc_act=self.quantize_config.desc_act,
-            warmup_triton=autotune_warmup_after_quantized,
-            force_layer_back_to_cpu=force_layer_back_to_cpu,
-            use_marlin=self.quantize_config.checkpoint_format == CHECKPOINT_FORMAT.MARLIN,
-            use_fpe2m2=self.quantize_config.checkpoint_format == CHECKPOINT_FORMAT.FPE2M2,
-        )
+        if fpe2m2_checkpoint_format:
+            pack_model(
+                model=self.model,
+                quantizers=quantizers,
+                bits=self.quantize_config.bits,
+                group_size=self.quantize_config.group_size,
+                use_triton=use_triton,
+                use_cuda_fp16=use_cuda_fp16,
+                desc_act=self.quantize_config.desc_act,
+                warmup_triton=autotune_warmup_after_quantized,
+                force_layer_back_to_cpu=force_layer_back_to_cpu,
+                use_marlin=self.quantize_config.checkpoint_format == CHECKPOINT_FORMAT.MARLIN,
+                use_fpe2m2=self.quantize_config.checkpoint_format == CHECKPOINT_FORMAT.FPE2M2,
+            )
+            self._quantized = True
         if device_map:
             self.model = remove_hook_from_module(self.model, recurse=True)
             self.model = simple_dispatch_model(self.model, device_map)
         self.model.config.use_cache = forward_pass_use_cache
 
-        self._quantized = True
 
         torch.cuda.empty_cache()
 
@@ -575,16 +586,16 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
         self.quantize_config.model_name_or_path = save_dir
         self.quantize_config.model_file_base_name = model_base_name
 
-    def save_pretrained(
-        self,
-        save_dir: str,
-        use_safetensors: bool = True,
-        safetensors_metadata: Optional[Dict[str, str]] = None,
-        **kwargs,
-    ):
-        """alias of save_quantized"""
-        logger.warning("you are using save_pretrained, which will re-direct to save_quantized.")
-        self.save_quantized(save_dir, use_safetensors, safetensors_metadata)
+    # def save_pretrained(
+    #     self,
+    #     save_dir: str,
+    #     use_safetensors: bool = True,
+    #     safetensors_metadata: Optional[Dict[str, str]] = None,
+    #     **kwargs,
+    # ):
+    #     """alias of save_quantized"""
+    #     logger.warning("you are using save_pretrained, which will re-direct to save_quantized.")
+    #     self.save_quantized(save_dir, use_safetensors, safetensors_metadata)
 
     @classmethod
     def from_pretrained(

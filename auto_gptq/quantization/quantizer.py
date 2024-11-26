@@ -28,14 +28,16 @@ def round_ste(x: torch.Tensor):
     Implement Straight-Through Estimator for rounding operation.
     """
     return (x.round() - x).detach() + x
-def sym_quant_fpe2m2_fake(x,scale=None,zero=None,power_scale=None):
+
+
+def sym_quant_fpe2m2_fake(x,qmax=14,bits=5,mb=2,scale=None,zero=None,power_scale=None):
     dtype=x.dtype
     if scale is None:
-        scale = x.abs().amax(dim=-1,keepdim=True) / 14
+        scale = x.abs().amax(dim=-1,keepdim=True) / qmax
     scale = scale.to(x.device)
     x = x.div(scale)
-    x=x.clamp(min=-14,max=14)
-    pot, v_step = get_scale(x,5,2,0)
+    x=x.clamp(min=-qmax,max=qmax)
+    pot, v_step = get_scale(x,bits,mb,0)
     x=round_ste(pot/v_step).mul(v_step)
     x = x.mul(scale).to(dtype=dtype)
     return x
@@ -56,7 +58,7 @@ class Quantizer(nn.Module):
         norm=2.4,
         grid=100,
         maxshrink=0.8,
-
+        exp=1,
     ):
         self.bits = bits
         self.maxq = torch.tensor(2**bits - 1)
@@ -66,7 +68,12 @@ class Quantizer(nn.Module):
         self.norm = norm
         self.grid = grid
         self.maxshrink = maxshrink
-        self.maxq = torch.tensor(28)
+        self.exp = exp
+        self.mant = bits - 1 - exp
+        if self.bits < 8:
+            self.maxq = torch.tensor(2**(2**self.exp - 1)*(2-2**(-self.mant))*2)
+        else:
+            self.maxq = torch.tensor(2**self.bits - 1)
 
     def find_params(self, x, weight=False):
         dev = x.device
@@ -144,7 +151,10 @@ class Quantizer(nn.Module):
 
     def quantize(self, x):
         if self.ready():
-            return sym_quant_fpe2m2_fake(x, self.scale, self.zero, self.maxq)
+            if self.bits < 8:
+                return sym_quant_fpe2m2_fake(x=x,qmax=self.maxq,bits=self.bits,mb=self.mant,scale=self.scale,zero=self.zero)
+            if self.bits == 8:
+                return x.to(torch.float8_e4m3fn).to(torch.float16)
         return x
 
     def enabled(self):

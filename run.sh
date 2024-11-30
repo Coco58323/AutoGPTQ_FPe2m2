@@ -1,9 +1,31 @@
 # MODEL=/root/exp/AutoGPTQ/Qwen2.5-7B-FPe2m2_RQ_2048sample_fp16-FP8-Dynamic
 MODEL=/root/data/model/Qwen2.5/Qwen2.5-7B-Instruct
 export HF_ENDPOINT=https://hf-mirror.com
-lm_eval --model vllm \
+lm_eval --model hf \
   --model_args pretrained=$MODEL,add_bos_token=True \
-  --tasks arc_easy,arc_challenge --batch_size 16 --apply_chat_template
+  --tasks mmlu,gsm8k --batch_size 4 --apply_chat_template
+lm_eval --model hf \
+  --model_args pretrained=$MODEL,add_bos_token=True \
+  --tasks mmlu,gsm8k --batch_size 4 --apply_chat_template
+lm_eval --model hf \
+  --model_args pretrained=$MODEL,add_bos_token=True \
+  --tasks mmlu,gsm8k --batch_size 4 --apply_chat_template
+lm_eval --model hf \
+  --model_args pretrained=$MODEL,add_bos_token=True \
+  --tasks mmlu,gsm8k --batch_size 4 --apply_chat_template
+lm_eval --model hf \
+  --model_args pretrained=$MODEL,add_bos_token=True \
+  --tasks mmlu,gsm8k --batch_size 4 --apply_chat_template
+lm_eval --model hf \
+  --model_args pretrained=$MODEL,add_bos_token=True \
+  --tasks mmlu,gsm8k --batch_size 4 --apply_chat_template
+lm_eval --model hf \
+  --model_args pretrained=$MODEL,add_bos_token=True \
+  --tasks mmlu,gsm8k --batch_size 4 --apply_chat_template
+lm_eval --model hf \
+  --model_args pretrained=$MODEL,add_bos_token=True \
+  --tasks mmlu,gsm8k --batch_size 4 --apply_chat_template
+
 #   --model_args pretrained=$MODEL,add_bos_token=True,gpu_memory_utilization=0.2 \
 
 # fp5 weight, fp8 inference

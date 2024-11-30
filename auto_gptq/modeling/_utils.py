@@ -135,6 +135,7 @@ def make_quant(
                     use_cuda_fp16=use_cuda_fp16,
                     trainable=trainable,
                     weight_dtype=submodule.weight.dtype,
+                    name=name,
                 )
             else:
                 new_layer = QuantLinear(
@@ -145,6 +146,7 @@ def make_quant(
                     bias,
                     trainable=trainable,
                     weight_dtype=submodule.weight.dtype,
+                    name=name,
                 )
             new_layer.device = ori_layer_device
             recurse_setattr(module, name, new_layer.to(ori_layer_device))

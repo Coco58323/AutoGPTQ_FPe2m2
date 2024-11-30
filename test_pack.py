@@ -76,10 +76,13 @@ def e2m2_map_inv(x):
     # print(x.dtype)
     return ValueError("Invalid input")
 
+# sparse_dict = {
+#     0: 0, 0.5: 1, 1: 2, 1.5: 3, 2: 4, 2.5: 5, 
+#     3: 6, 3.5: 7, 4: 8, 5: 9, 6: 10, 7: 11, 
+#     8: 12, 10: 13, 12: 14, 14: 15
+# }
 sparse_dict = {
-    0: 0, 0.5: 1, 1: 2, 1.5: 3, 2: 4, 2.5: 5, 
-    3: 6, 3.5: 7, 4: 8, 5: 9, 6: 10, 7: 11, 
-    8: 12, 10: 13, 12: 14, 14: 15
+    0:0, 1:1, 2:2, 3:3, 4:4, 5:5, 6:6, 7:7, 8:8, 10:9, 12:10, 14:11, 16:12, 20:13, 24:14, 28:15
 }
 e2m2_keys = torch.tensor(list(sparse_dict.keys()), dtype=torch.float32)
 e2m2_values = torch.tensor(list(sparse_dict.values()), dtype=torch.int64)
@@ -154,6 +157,7 @@ class WeightPack:
         sign_map = torch.sign(quant_weight)
         sign_map = torch.where(sign_map == 1, 0, 1)
         quant_weight = quant_weight.abs()
+        quant_weight = quant_weight * 2
         # apply element-wise e2m2 map func to quant_weight
         # quant_weight = quant_weight.apply_(e2m2_map)
         indices = torch.bucketize(quant_weight, e2m2_keys)
@@ -231,7 +235,7 @@ weight_pack.pack(weight)
 weight_pack.unpack()
 weight1 = weight_pack.weight
 weight2 = weight
-
+assert torch.allclose(weight1, weight2, atol=1e-5)
 weight1 = torch.randn(4096, 4096)
 activation = torch.randn(4096, 4096)
 activation[:, 0] = torch.ones(4096)*20

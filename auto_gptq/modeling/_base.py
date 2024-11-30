@@ -306,7 +306,6 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                             bits = self.quantize_config.bits
                     else:
                         bits = self.quantize_config.bits
-                    print(f"quantizing {names} with {bits} bits")
                     gptq[name] = GPTQ(subset[name])
                     gptq[name].quantizer.configure(
                         bits,

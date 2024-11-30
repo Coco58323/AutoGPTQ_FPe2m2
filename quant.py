@@ -90,8 +90,6 @@ def get_ours(nsamples, data_path, seqlen, model, hf_token, eval_mode=False):
     humaneval_contents = []
     for l in f:
         data = json.loads(l)
-        contents.append(data)
-        continue
         if data['source'] == "en:mmlu":
             mmlu_contents.append(data)
         elif data['source'] == "cn:ceval":
@@ -120,7 +118,7 @@ def get_ours(nsamples, data_path, seqlen, model, hf_token, eval_mode=False):
             contents.append(data)
     import random
     random.shuffle(contents)
-    # contents = en_math[:300] + en_mbpp[:500] + mmlu_contents[:500] + cn_code[:500] + ceval_contents[:500] + gsm8k_contents[:500] + humaneval_contents[:500] + chinese_exam[:800] + loginqa[:500] + logiqa[:500] + en_instruct_f[:300] + en_qa[:500] + contents[:4120]
+    contents = en_math[:300] + en_mbpp[:500] + mmlu_contents[:500] + cn_code[:500] + ceval_contents[:500] + gsm8k_contents[:500] + humaneval_contents[:500] + chinese_exam[:800] + loginqa[:500] + logiqa[:500] + en_instruct_f[:300] + en_qa[:500] + contents[:4120]
     # contents = en_math + en_mbpp + mmlu_contents + cn_code + ceval_contents + gsm8k_contents + humaneval_contents + chinese_exam + loginqa + logiqa + en_instruct_f + en_qa + contents
 
     from tqdm import tqdm
@@ -145,14 +143,14 @@ def get_ours(nsamples, data_path, seqlen, model, hf_token, eval_mode=False):
 
     del contents
     del examples
-    torch.cuda.empty_cache()
+    torch.cuda.empty_cache() 
     return new_examples
 
 
 def main():
     parser = ArgumentParser()
-    parser.add_argument("--pretrained_model_dir", type=str, default="/root/data/model/Qwen2.5/Qwen2.5-0.5B-Instruct")
-    parser.add_argument("--quantized_model_dir", type=str, default="/root/exp/AutoGPTQ/Qwen2.5-0.5B-FPe2m2_RQ_ct")
+    parser.add_argument("--pretrained_model_dir", type=str, default="/root/data/model/Qwen2.5/Qwen2.5-72B-Instruct")
+    parser.add_argument("--quantized_model_dir", type=str, default="/root/exp/AutoGPTQ/Qwen2.5-72B-FPe1m3_v3")
     parser.add_argument("--bits", type=int, default=4, choices=[2, 3, 4, 8])
     parser.add_argument("--calib_data", type=str, default="/root/exp/moe-lora/data/v10.15.35_beta.jsonl")
     parser.add_argument(
@@ -165,7 +163,7 @@ def main():
     parser.add_argument(
         "--num_samples",
         type=int,
-        default=128,
+        default=512,
         help="how many samples will be used to quantize model",
     )
     parser.add_argument(
@@ -229,16 +227,16 @@ def main():
     else:
         checkpoint_format = 'fp16'
         quantized_model_dir = args.quantized_model_dir + "_fp16"
-    quant_config = BaseQuantizeConfig(bits=5,exp=2, group_size=args.group_size, desc_act=args.desc_act,checkpoint_format=checkpoint_format, mixed_precision=False)
-    model = AutoGPTQForCausalLM.from_pretrained(
-        args.pretrained_model_dir,
-        quantize_config=quant_config,
-        max_memory=max_memory,
-        trust_remote_code=args.trust_remote_code,
-        torch_dtype=torch.bfloat16,
-    )
-
+    quant_config = BaseQuantizeConfig(bits=5,exp=1, group_size=args.group_size, desc_act=args.desc_act,checkpoint_format=checkpoint_format, mixed_precision=False)
     if not args.ready:
+        model = AutoGPTQForCausalLM.from_pretrained(
+            args.pretrained_model_dir,
+            quantize_config=quant_config,
+            max_memory=max_memory,
+            trust_remote_code=args.trust_remote_code,
+            torch_dtype=torch.bfloat16,
+        )
+
         examples = get_ours(args.num_samples, args.calib_data, 2048, args.pretrained_model_dir, tokenizer, eval_mode=True)
         examples_for_quant = [
             {"input_ids": example["input_ids"], "attention_mask": example["attention_mask"]} for example in examples
@@ -248,42 +246,50 @@ def main():
             examples_for_quant,
             batch_size=args.quant_batch_size,
             fpe2m2_checkpoint_format=args.fpe2m2_checkpoint_format,
-            cache_examples_on_gpu=False,
+            # cache_examples_on_gpu=False,
         )
         end = time.time()
         print(f"quantization took: {end - start: .4f}s")
-
-        # if args.save_and_reload:
+        
+        # model.config._attn_implementation_autoset=False
+        model.config._attn_implementation_autoset=False
         import os
         import shutil
         os.makedirs(quantized_model_dir, exist_ok=True)
-        for file in os.listdir(args.pretrained_model_dir):
-            if file.endswith(".txt") or file.endswith(".json"):
-                shutil.copy(os.path.join(args.pretrained_model_dir, file), quantized_model_dir)
         if args.fpe2m2_checkpoint_format:
             model.save_quantized(quantized_model_dir)
         else:
             model.save_pretrained(quantized_model_dir)
+        tokenizer.save_pretrained(quantized_model_dir)
+            
+            
+        text = "Instruction:\nWrite a summary.\nInput:Large language models have demonstrated promising capabilities upon scaling up parameters. However, serving large language models incurs substantial computation and memory movement costs due to their large scale. Quantization methods have been employed to reduce service costs and latency."
+        # model = model.to('cuda')
+        inputs = tokenizer(text, return_tensors="pt",max_length=32,padding=True,truncation=True).to(model.device)
+        outputs = model.generate(**inputs, max_length=128, num_beams=1, no_repeat_ngram_size=2, early_stopping=True)
+        print(tokenizer.decode(outputs[0], skip_special_tokens=True))
         del model
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
     print("load model")
     if args.fpe2m2_checkpoint_format:
-        quant_config = BaseQuantizeConfig(bits=args.bits, group_size=args.group_size, desc_act=args.desc_act,checkpoint_format='fpe2m2')
         model = AutoGPTQForCausalLM.from_quantized(
             quantized_model_dir,
             quantize_config=quant_config,
             trust_remote_code=args.trust_remote_code,
+            torch_dtype=torch.bfloat16,
         )
     else:
         model = AutoModelForCausalLM.from_pretrained(
             quantized_model_dir,
             trust_remote_code=args.trust_remote_code,
+            device_map='auto',
+            torch_dtype=torch.bfloat16,
         )
-    text = "Instruction:\nWrite a summary.\nInput:We consider the problem of model compression for deep neural networks (DNNs) in the challenging one-shot/post-training setting, in which we are given an accurate trained model, and must compress it without any retraining, based only on a small amount of calibration input data. This problem has become popular in view of the emerging software and hardware support for executing models compressed via pruning and/or quantization with speedup, and well-performing solutions have been proposed independently for both compression approaches. In this paper, we introduce a new compression framework which covers both weight pruning and quantization in a unified setting, is time- and space-efficient, and considerably improves upon the practical performance of existing post-training methods. At the technical level, our approach is based on an exact and efficient realization of the classical Optimal Brain Surgeon (OBS) framework of [LeCun, Denker, and Solla, 1990] extended to also cover weight quantization at the scale of modern DNNs. From the practical perspective, our experimental results show that it can improve significantly upon the compression-accuracy trade-offs of existing post-training methods, and that it can enable the accurate compound application of both pruning and quantization in a post-training setting."
-    inputs = tokenizer(text, return_tensors="pt",max_length=128,padding=True,truncation=True).to(model.device)
-    outputs = model.generate(**inputs, max_length=2048, num_beams=1, no_repeat_ngram_size=2, early_stopping=True)
+    text = "How is the weather in Beijing?"
+    inputs = tokenizer(text, return_tensors="pt",max_length=32,padding=True,truncation=True).to(model.device)
+    outputs = model.generate(**inputs, max_length=128, num_beams=1, no_repeat_ngram_size=2, early_stopping=True)
     print(tokenizer.decode(outputs[0], skip_special_tokens=True))
 
 if __name__ == "__main__":

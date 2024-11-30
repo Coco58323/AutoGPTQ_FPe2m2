@@ -1,112 +1,43 @@
-import math
 from logging import getLogger
 
 import numpy as np
 import torch
 import torch.nn as nn
-import transformers
-def e2m2_map(x):
-    if x==0:
-        return 0
-    if x==0.5:
-        return 1
-    if x==1:
-        return 2
-    if x==1.5:
-        return 3
-    if x==2:
-        return 4
-    if x==2.5:
-        return 5
-    if x==3:
-        return 6
-    if x==3.5:
-        return 7
-    if x==4:
-        return 8
-    if x==5:
-        return 9
-    if x==6:
-        return 10
-    if x==7:
-        return 11
-    if x==8:
-        return 12
-    if x==10:
-        return 13
-    if x==12:
-        return 14
-    if x==14:
-        return 15
-    return ValueError("Invalid input")
 
 sparse_dict = {
-    0: 0, 0.5: 1, 1: 2, 1.5: 3, 2: 4, 2.5: 5, 
-    3: 6, 3.5: 7, 4: 8, 5: 9, 6: 10, 7: 11, 
-    8: 12, 10: 13, 12: 14, 14: 15
+    0:0, 1:1, 2:2, 3:3, 4:4, 5:5, 6:6, 7:7, 8:8, 10:9, 12:10, 14:11, 16:12, 20:13, 24:14, 28:15
 }
-e2m2_keys = torch.tensor(list(sparse_dict.keys()), dtype=torch.float32)
-e2m2_values = torch.tensor(list(sparse_dict.values()), dtype=torch.int64)
-
-def e2m2_map_inv(x):
-    if x==0:
-        return 0
-    if x==1:
-        return 0.5
-    if x==2:
-        return 1
-    if x==3:
-        return 1.5
-    if x==4:
-        return 2
-    if x==5:
-        return 2.5
-    if x==6:
-        return 3
-    if x==7:
-        return 3.5
-    if x==8:
-        return 4
-    if x==9:
-        return 5
-    if x==10:
-        return 6
-    if x==11:
-        return 7
-    if x==12:
-        return 8
-    if x==13:
-        return 10
-    if x==14:
-        return 12
-    if x==15:
-        return 14
-    return ValueError("Invalid input")
+e2m2_keys = torch.tensor(list(sparse_dict.keys()), dtype=torch.int32)
+e2m2_values = torch.tensor(list(sparse_dict.values()), dtype=torch.int32)
 inverse_table = torch.tensor([0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6, 7, 8, 10, 12, 14], dtype=torch.float32)
-def get_scale(input, bits, mantissa_bit, bias):
+def get_scale(input, bits, mantissa_bit):
         M = mantissa_bit
         E = bits - 1 - M
         maxval = (2 - 2 ** (-M)) * 2 ** (
-                2**E - 1 - bias
+                2**E - 1 
             )
         minval = -maxval
         input = input.clamp(minval, maxval)
-        input_log_scales = torch.clamp((torch.floor(torch.log2(torch.abs(input)) + bias)).detach(), 1.0)
-        return input, 2.0 ** (input_log_scales - M - bias)
+        input_log_scales = torch.clamp((torch.floor(torch.log2(torch.abs(input)) )).detach(), 1.0)
+        return input, 2.0 ** (input_log_scales - M)
+
+
 def round_ste(x: torch.Tensor):
     """
     Implement Straight-Through Estimator for rounding operation.
     """
     return (x.round() - x).detach() + x
-def sym_quant_fpe2m2(x,scale=None):
+
+
+def sym_quant_fpe2m2(x,scale=None,qmax=28,bits=5,mb=2):
+    dtype=x.dtype
     if scale is None:
-        scale = x.abs().amax(dim=-1,keepdim=True)
+        scale = x.abs().amax(dim=-1,keepdim=True)/(qmax/2)
     scale = scale.to(x.device)
-    x = x / scale
-    x = x.clamp(-14,14)
-    w, w_scale = get_scale(x,5,2,0)
-    w=round_ste(w/w_scale)
-    x=w.mul(w_scale)
+    x = x.div(scale)
+    x=x.clamp(min=-qmax/2,max=qmax/2)
+    pot, v_step = get_scale(x,bits,mb)
+    x=round_ste(pot/v_step).mul(v_step)
     return x
 
 logger = getLogger(__name__)
@@ -130,10 +61,11 @@ class QuantLinear(nn.Module):
         infeatures,
         outfeatures,
         bias,
+        name=None,
         use_cuda_fp16=False,
         kernel_switch_threshold=128,
         trainable=False,
-        weight_dtype=torch.float16,
+        weight_dtype=torch.bfloat16,
     ):
         super().__init__()
         global _autogptq_cuda_available
@@ -142,19 +74,17 @@ class QuantLinear(nn.Module):
 
         self.infeatures = infeatures
         self.outfeatures = outfeatures
-        self.bits = 4
         self.group_size = group_size if group_size != -1 else infeatures
-        self.maxq = 2**self.bits - 1
 
         self.register_buffer(
             "qweight",
-            torch.zeros((infeatures // 32 * self.bits, outfeatures), dtype=torch.int32),
+            torch.zeros((infeatures // 8, outfeatures), dtype=torch.int32),
         )
         self.register_buffer(
             "scales",
             torch.zeros(
                 (1, outfeatures),
-                dtype=weight_dtype,
+                dtype=torch.bfloat16,
             ),
         )
         self.register_buffer(
@@ -173,27 +103,26 @@ class QuantLinear(nn.Module):
         self.inverse_table = inverse_table
         self.e2m2_keys = e2m2_keys
         self.e2m2_values = e2m2_values
-        self.trainable = trainable
-
+        self.name = name
     def post_init(self):
         pass
 
     def pack(self, linear, scales=None, zero=None, g_idx=None):
-        self.compare_weight = linear.weight.data.clone()
         W = linear.weight.data.clone()
+        scales = scales.to(linear.weight.dtype)
         if scales is None:
-            scales = W.abs().amax(dim=-1, keepdim=True)/14
-        scales = scales.contiguous()
+            raise ValueError("scales is None")
         if linear.bias is not None:
             self.bias = linear.bias.clone().to(dtype=linear.weight.dtype)
-        quant_weight = sym_quant_fpe2m2(W, scales)
+        quant_weight = sym_quant_fpe2m2(W, scale=scales)
+        self.compare_weight = quant_weight*scales
         sign_map = torch.sign(quant_weight)
         sign_map = torch.where(sign_map == 1, 0, 1)
         quant_weight = quant_weight.abs()
-        # apply element-wise e2m2 map func to quant_weight
-        # quant_weight = quant_weight.apply_(e2m2_map)
-        indices = torch.bucketize(quant_weight, e2m2_keys)
-        quant_weight = torch.take(e2m2_values, indices)
+        quant_weight = quant_weight * 2
+        quant_weight = quant_weight.to(torch.int32)
+        indices = torch.bucketize(quant_weight, self.e2m2_keys)
+        quant_weight = torch.take(self.e2m2_values, indices)
         intweight = []
 
         for idx in range(self.infeatures):
@@ -209,17 +138,12 @@ class QuantLinear(nn.Module):
 
         i = 0
         row = 0
-        qweight = np.zeros((intweight.shape[0] // 32 * self.bits, intweight.shape[1]), dtype=np.uint32)
+        qweight = np.zeros((intweight.shape[0] // 8, intweight.shape[1]), dtype=np.uint32)
         q_sign_map = np.zeros((intweight.shape[0] // 32, intweight.shape[1]), dtype=np.uint32)
         while row < qweight.shape[0]:
-            for j in range(i, i + (32 // self.bits)):
-                t = intweight[j] & ((2**self.bits - 1)<<self.bits)
-                # check if any non-zero bits are in the upper bits of the tensor
-                check = (t!=0).any()
-                if check:
-                    raise ValueError("Non-zero bits in upper bits")
-                qweight[row] |= intweight[j] << (self.bits * (j - i))
-            i += 32 // self.bits
+            for j in range(i, i + (8)):
+                qweight[row] |= intweight[j] << (4* (j - i))
+            i += 8
             row += 1
         row = 0
         i = 0
@@ -233,24 +157,23 @@ class QuantLinear(nn.Module):
         self.qweight = torch.from_numpy(qweight)
         q_sign_map = q_sign_map.astype(np.int32)
         self.sign_map = torch.from_numpy(q_sign_map)
-        self.scales = scales.clone().to(dtype=linear.weight.dtype).T
+        self.scales = scales.clone().T
     def unpack(self):
         if self.weight is not None:
-            return
+            return self.weight
         self.wf = self.wf.to(self.qweight.device)
         self.inverse_table = self.inverse_table.to(self.qweight.device)
         intweight = torch.bitwise_right_shift(
-            torch.unsqueeze(self.qweight, 1).expand(-1, 32 // self.bits, -1),
+            torch.unsqueeze(self.qweight, 1).expand(-1, 8, -1),
             self.wf.unsqueeze(-1),
-        ).to(torch.int16 if self.bits == 8 else torch.int8)
-        intweight = torch.bitwise_and(intweight, (2**self.bits) - 1).to(torch.long)
-        # intweight = intweight.apply_(e2m2_map_inv)
+        ).to(torch.int8)
+        intweight = torch.bitwise_and(intweight, (2**4) - 1).to(torch.long)
         intweight = torch.take(self.inverse_table, intweight)
         intweight = intweight.reshape(self.infeatures, self.outfeatures).T
         self.wf_sign = self.wf_sign.to(self.qweight.device)
-        self.sign_map = self.sign_map.to(self.qweight.device)
+        sign_map = self.sign_map.to(self.qweight.device)
         bit_map = torch.bitwise_right_shift(
-            torch.unsqueeze(self.sign_map, 1).expand(-1, 32, -1),
+            torch.unsqueeze(sign_map, 1).expand(-1, 32, -1),
             self.wf_sign.unsqueeze(-1),
         )
         bit_map = torch.bitwise_and(bit_map, 1).to(torch.uint32)
@@ -259,7 +182,8 @@ class QuantLinear(nn.Module):
         weight = intweight * (self.scales.T)
         weight = weight.to(self.wf.device)
         bit_map = bit_map.to(self.wf.device)
-        weight = torch.where(bit_map == 1, -weight, weight)
+        weight = torch.where(bit_map == 1, -weight, weight).to(torch.bfloat16)
+        self.weight = weight
         return weight
 
     def forward(self, x: torch.Tensor):
@@ -273,11 +197,12 @@ class QuantLinear(nn.Module):
                 self.qweight, # int32 (infeatures // 32 * self.bits, outfeatures)
                 self.sign_map, # int32 (infeatures // 32, outfeatures)
                 out, #  fp16 (batch, outfeatures)
-                self.scales.float(), # fp8 (1, outfeatures)
+                self.scales.float(), # fp32 (1, outfeatures)
             )
         else:
             weight = self.unpack()
             weight = weight.to(x.device)
+            x = x.to(torch.bfloat16)
             out = x @ weight.T
         out = out.to(x_dtype)
         out = out.reshape(out_shape)

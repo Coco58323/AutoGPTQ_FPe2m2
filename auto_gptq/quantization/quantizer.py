@@ -13,31 +13,31 @@ def quantize(x, scale, zero, maxq):
     q = torch.clamp(torch.round(x / scale) + zero, 0, maxq)
     return scale * (q - zero)
 
-def get_scale(input, bits, mantissa_bit, bias):
-        M = mantissa_bit
-        E = bits - 1 - M
-        maxval = (2 - 2 ** (-M)) * 2 ** (
-                2**E - 1 - bias
-            )
-        minval = -maxval
-        input = input.clamp(minval, maxval)
-        input_log_scales = torch.clamp((torch.floor(torch.log2(torch.abs(input)) + bias)).detach(), 1.0)
-        return input, 2.0 ** (input_log_scales - M - bias)
+def get_scale(input, bits, mantissa_bit):
+    M = mantissa_bit
+    E = bits - 1 - M
+    maxval = (2 - 2 ** (-M)) * 2 ** (
+            2**E - 1 
+        )
+    minval = -maxval
+    input = input.clamp(minval, maxval)
+    input_log_scales = torch.clamp((torch.floor(torch.log2(torch.abs(input)))).detach(), 1.0)
+    return input, 2.0 ** (input_log_scales - M)
+
+
 def round_ste(x: torch.Tensor):
     """
     Implement Straight-Through Estimator for rounding operation.
     """
     return (x.round() - x).detach() + x
-
-
-def sym_quant_fpe2m2_fake(x,qmax=14,bits=5,mb=2,scale=None,zero=None,power_scale=None):
+def sym_quant_fpe2m2_fake(x,scale=None,qmax=28,bits=5,mb=2,zero=None,power_scale=None):
     dtype=x.dtype
     if scale is None:
-        scale = x.abs().amax(dim=-1,keepdim=True) / qmax
+        scale = x.abs().amax(dim=-1,keepdim=True)/(qmax/2)
     scale = scale.to(x.device)
     x = x.div(scale)
-    x=x.clamp(min=-qmax,max=qmax)
-    pot, v_step = get_scale(x,bits,mb,0)
+    x=x.clamp(min=-qmax/2,max=qmax/2)
+    pot, v_step = get_scale(x,bits,mb)
     x=round_ste(pot/v_step).mul(v_step)
     x = x.mul(scale).to(dtype=dtype)
     return x
@@ -74,7 +74,7 @@ class Quantizer(nn.Module):
             self.maxq = torch.tensor(2**(2**self.exp - 1)*(2-2**(-self.mant))*2)
         else:
             self.maxq = torch.tensor(2**self.bits - 1)
-
+        print('maxq',self.maxq)
     def find_params(self, x, weight=False):
         dev = x.device
         self.maxq = self.maxq.to(dev)
@@ -152,7 +152,7 @@ class Quantizer(nn.Module):
     def quantize(self, x):
         if self.ready():
             if self.bits < 8:
-                return sym_quant_fpe2m2_fake(x=x,qmax=self.maxq,bits=self.bits,mb=self.mant,scale=self.scale,zero=self.zero)
+                return sym_quant_fpe2m2_fake(x=x,scale=self.scale,qmax=self.maxq,bits=self.bits,mb=self.mant,zero=self.zero)
             if self.bits == 8:
                 return x.to(torch.float8_e4m3fn).to(torch.float16)
         return x
